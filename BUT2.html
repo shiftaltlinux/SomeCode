@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>User Bookings</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; }
+  .controls { margin-bottom: 12px; display: flex; gap: 12px; align-items: center; }
+  .controls input { padding: 6px 10px; width: 280px; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+  th { background: #f4f4f4; cursor: pointer; user-select: none; }
+  th:hover { background: #e0e0e0; }
+  th .arrow { font-size: 10px; margin-left: 4px; }
+  tr:nth-child(even) { background: #fafafa; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+  .badge.active { background: #d4edda; color: #155724; }
+  .badge.inactive { background: #f8d7da; color: #721c24; }
+  .pagination { margin-top: 12px; display: flex; gap: 4px; align-items: center; }
+  .pagination button { padding: 6px 12px; border: 1px solid #ccc; background: #fff; cursor: pointer; border-radius: 4px; }
+  .pagination button.active { background: #007bff; color: #fff; border-color: #007bff; }
+  .pagination button:disabled { opacity: 0.4; cursor: default; }
+  .pagination span { margin: 0 8px; font-size: 14px; }
+  .page-size { margin-left: 12px; }
+  .page-size select { padding: 4px 8px; }
+</style>
+</head>
+<body>
+
+<h2>User Bookings</h2>
+<div class="controls">
+  <input type="text" id="filter" placeholder="Filter (name, email, booking_nr)…">
+  <div class="page-size">
+    <label>Rows/page:
+      <select id="pageSize">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </label>
+  </div>
+</div>
+<table id="tbl">
+  <thead><tr id="head-row"></tr></thead>
+  <tbody id="body"></tbody>
+</table>
+<div class="pagination" id="pagination"></div>
+
+<script>
+// ─── Sample data (50 random records) ───────────────────────────────────────
+const firstNames = ["Anna","Ben","Clara","David","Eva","Felix","Greta","Hans","Ines","Jonas","Klara","Lukas","Mia","Nils","Olga","Paul","Quinn","Rosa","Stefan","Tina","Uwe","Vera","Wolfgang","Xenia","Yvonne","Zeno","Alice","Bruno","Carmen","Derek","Elise","Frank","Gina","Hugo","Irene","Jorge","Karin","Lars","Mona","Nico","Olive","Piet","Rita","Sven","Tara","Urs","Vera","Wendy","Xander","Yara","Zoltan"];
+const lastNames  = ["Müller","Schmidt","Schneider","Fischer","Weber","Meyer","Wagner","Becker","Hoffmann","Schulz","Koch","Bauer","Richter","Klein","Wolf","Neumann","Schwarz","Braun","Krüger","Hofmann","Lehmann","Schubert","Maier","Schmidt","Köhler","Hartmann","Lang","Winkler","Richter","Stein","Brandt","Krause","Hartmann","Wagner","Keller","Voigt","Krause","Schulze","Jung","Fuchs","Peters","Krause","Lehmann","Mayer","Wagner","Bauer","Klein","Schmidt","Wolf"];
+const domains = ["example.com","mail.de","web.de","gmx.de","outlook.com","yahoo.com"];
+
+function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function randDate(startY, endY) {
+  const y = rand(startY, endY);
+  const m = String(rand(1,12)).padStart(2,'0');
+  const d = String(rand(1,28)).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
+
+const data = Array.from({length: 50}, (_, i) => {
+  const fn = firstNames[i % firstNames.length];
+  const ln = lastNames[i % lastNames.length];
+  const fromY = rand(2025, 2026);
+  const fromM = rand(1,12);
+  const fromD = rand(1,28);
+  const toM   = rand(fromM, 12);
+  const toD   = rand(1,28);
+  return {
+    isActive: Math.random() > 0.3,
+    name: `${fn} ${ln}`,
+    booking_nr: String(rand(100000, 999999)),
+    date_of_birth: randDate(1970, 2010),
+    email: `${fn.toLowerCase()}.${ln.toLowerCase().replace(/[^a-z]/g,'')}@${domains[rand(0, domains.length-1)]}`,
+    date_from: `${fromY}-${String(fromM).padStart(2,'0')}-${String(fromD).padStart(2,'0')}`,
+    date_to: `${fromY}-${String(toM).padStart(2,'0')}-${String(toD).padStart(2,'0')}`,
+    new_date_from: randDate(2026, 2027),
+    new_date_to: randDate(2026, 2027)
+  };
+});
+
+// ─── Table rendering ───────────────────────────────────────────────────────
+const columns = [
+  { key: 'isActive',      label: 'Active' },
+  { key: 'name',          label: 'Name' },
+  { key: 'booking_nr',    label: 'Booking #', type: 'number' },
+  { key: 'date_of_birth', label: 'Date of Birth', type: 'date' },
+  { key: 'email',         label: 'Email' },
+  { key: 'date_from',     label: 'From', type: 'date' },
+  { key: 'date_to',       label: 'To', type: 'date' },
+  { key: 'new_date_from', label: 'New From', type: 'date' },
+  { key: 'new_date_to',   label: 'New To', type: 'date' }
+];
+
+let sortKey = null, sortAsc = true;
+let currentPage = 1;
+let pageSize = 20;
+
+function getFilteredSorted() {
+  const filter = document.getElementById('filter').value.toLowerCase();
+  let rows = data.filter(r =>
+    Object.values(r).some(v => String(v).toLowerCase().includes(filter))
+  );
+  if (sortKey) {
+    const col = columns.find(c => c.key === sortKey);
+    rows.sort((a, b) => {
+      let va = a[sortKey], vb = b[sortKey];
+      if (col?.type === 'number') { va = Number(va); vb = Number(vb); }
+      if (col?.type === 'date')   { va = new Date(va); vb = new Date(vb); }
+      if (typeof va === 'boolean'){ va = va ? 1 : 0; vb = vb ? 1 : 0; }
+      if (va < vb) return sortAsc ? -1 : 1;
+      if (va > vb) return sortAsc ?  1 : -1;
+      return 0;
+    });
+  }
+  return rows;
+}
+
+function render() {
+  const rows = getFilteredSorted();
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+
+  const start = (currentPage - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  // Header
+  const headRow = document.getElementById('head-row');
+  headRow.innerHTML = columns.map(c =>
+    `<th data-key="${c.key}">${c.label}<span class="arrow">${sortKey === c.key ? (sortAsc ? '▲' : '▼') : ''}</span></th>`
+  ).join('');
+  headRow.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if (sortKey === key) sortAsc = !sortAsc;
+    else { sortKey = key; sortAsc = true; }
+    currentPage = 1;
+    render();
+  }));
+
+  // Body
+  const body = document.getElementById('body');
+  body.innerHTML = pageRows.map(r =>
+    `<tr>
+      <td><span class="badge ${r.isActive ? 'active' : 'inactive'}">${r.isActive ? 'Yes' : 'No'}</span></td>
+      <td>${r.name}</td>
+      <td>${r.booking_nr}</td>
+      <td>${r.date_of_birth}</td>
+      <td>${r.email}</td>
+      <td>${r.date_from}</td>
+      <td>${r.date_to}</td>
+      <td>${r.new_date_from}</td>
+      <td>${r.new_date_to}</td>
+    </tr>`
+  ).join('');
+
+  // Pagination
+  const pag = document.getElementById('pagination');
+  let html = `<button ${currentPage === 1 ? 'disabled' : ''} data-page="${currentPage - 1}">«</button>`;
+  for (let p = 1; p <= totalPages; p++) {
+    if (totalPages > 7 && Math.abs(p - currentPage) > 2 && p !== 1 && p !== totalPages) {
+      if (html.endsWith('</button>')) html += `<span>…</span>`;
+      continue;
+    }
+    html += `<button class="${p === currentPage ? 'active' : ''}" data-page="${p}">${p}</button>`;
+  }
+  html += `<button ${currentPage === totalPages ? 'disabled' : ''} data-page="${currentPage + 1}">»</button>`;
+  html += `<span>${rows.length} rows</span>`;
+  pag.innerHTML = html;
+  pag.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+    currentPage = Number(btn.dataset.page);
+    render();
+  }));
+}
+
+document.getElementById('filter').addEventListener('input', () => { currentPage = 1; render(); });
+document.getElementById('pageSize').addEventListener('change', e => { pageSize = Number(e.target.value); currentPage = 1; render(); });
+render();
+</script>
+</body>
+</html>   
